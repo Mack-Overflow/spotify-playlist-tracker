@@ -1,4 +1,4 @@
-import { writeFile, appendFile, access, constants } from 'fs/promises';
+import { writeFile, appendFile, access, constants, readFile } from 'fs/promises';
 import { join } from 'path';
 
 let lastSnapshotId = '';
@@ -24,6 +24,11 @@ interface YouTubeVideoDetail {
   contentDetails: {
     duration: string;
   };
+}
+
+function extractVideoId(videoUrl: string): string | null {
+  const match = videoUrl.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:&|$)/);
+  return match ? match[1] : null;
 }
 
 function parseISO8601Duration(isoDuration: string) {
@@ -72,7 +77,7 @@ export default defineEventHandler(async () => {
   for (const track of tracks) {
     const { title, artist, durationMs } = track;
     const searchQuery = `${title} ${artist}`;
-    const durationMin = Math.round(durationMs / 1000 / 60);
+    const durationMin = Math.round(durationMs / 1000 / 5);
 
     const searchRes = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(searchQuery)}&key=${config.public.youtubeApiKey}`
@@ -96,17 +101,44 @@ export default defineEventHandler(async () => {
     const videoUrl = matchingVideo ? `https://www.youtube.com/watch?v=${matchingVideo.id}` : null;
 
     if (videoUrl && title && artist) {
-      const filePath = join(process.cwd(), 'new-songs.csv');
-      const line = `"${title.replace(/"/g, '""')}","${artist.replace(/"/g, '""')}","${videoUrl}"\n`;
-
-      try {
-        await access(filePath, constants.F_OK).catch(() =>
-          writeFile(filePath, `"Title","Artist","YouTube URL"\n`)
-        );
-        await appendFile(filePath, line);
-      } catch (err) {
-        console.error('Failed to write to CSV:', err);
+      const videoId = extractVideoId(videoUrl);
+      if (!videoId) {
+        console.warn('Invalid video URL, skipping:', videoUrl);
+      } else {
+        const filePath = join(process.cwd(), 'new-songs.csv');
+        const line = `"${title.replace(/"/g, '""')}","${artist.replace(/"/g, '""')}","${videoUrl}"\n`;
+    
+        try {
+          // Ensure file exists or create it with headers
+          await access(filePath, constants.F_OK).catch(() =>
+            writeFile(filePath, `"Title","Artist","YouTube URL"\n`)
+          );
+    
+          // Read existing content
+          const content = await readFile(filePath, 'utf-8');
+          const existingIds = new Set(
+            content
+              .split('\n')
+              .map(row => {
+                const url = row.split(',')[2]?.replace(/"/g, '');
+                return url ? extractVideoId(url) : null;
+              })
+              .filter(Boolean)
+          );
+    
+          // Write only if video ID is new
+          if (!existingIds.has(videoId)) {
+            await appendFile(filePath, line);
+            console.log(`Added new song: ${title} by ${artist}`);
+          } else {
+            console.log(`Duplicate found, skipping: ${videoId}`);
+          }
+        } catch (err) {
+          console.error('Failed to write to CSV:', err);
+        }
       }
+    
+      results.push({ title, artist, video: videoUrl });
     }
 
     results.push({ title, artist, video: videoUrl });
