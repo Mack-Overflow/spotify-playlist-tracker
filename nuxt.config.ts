@@ -8,4 +8,7 @@ export default defineNuxtConfig({
     }
   },
   modules: ['@nuxtjs/tailwindcss'],
+  build: {
+    transpile: ['vanta', 'three']
+  }
 })
